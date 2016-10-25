@@ -28,8 +28,10 @@ set -o pipefail
 ## Variable Declartions ##
 
 # Get Instance Details
-instance_id=$(curl -s http://169.254.169.254/latest/meta-data/instance-id)
+#instance_id=$(curl -s -q -O- http://169.254.169.254/latest/meta-data/instance-id)
 region=$(curl -s http://169.254.169.254/latest/meta-data/placement/availability-zone | sed -e 's/\([1-9]\).$/\1/g')
+# Get all Instance ID
+all_instanceid=$(aws ec2 describe-instances --region us-west-2 --filters Name=instance-state-name,Values=running --query  'Reservations[].Instances[].InstanceId' --output text)
 
 # Set Logging Options
 logfile="/var/log/ebs-snapshot.log"
@@ -48,7 +50,7 @@ log_setup() {
     ( [ -e "$logfile" ] || touch "$logfile" ) && [ ! -w "$logfile" ] && echo "ERROR: Cannot write to $logfile. Check permissions or sudo access." && exit 1
 
     tmplog=$(tail -n $logfile_max_lines $logfile 2>/dev/null) && echo "${tmplog}" > $logfile
-    exec > >(tee -a $logfile)
+    exec >  >(tee -a $logfile)
     exec 2>&1
 }
 
@@ -76,7 +78,7 @@ snapshot_volumes() {
 		device_name=$(aws ec2 describe-volumes --region $region --output=text --volume-ids $volume_id --query 'Volumes[0].{Devices:Attachments[0].Device}')
 
 		# Take a snapshot of the current volume, and capture the resulting snapshot ID
-		snapshot_description="$(hostname)-$device_name-backup-$(date +%Y-%m-%d)"
+		snapshot_description="$instance_id-$device_name-backup-$(date +%Y-%m-%d)"
 
 		snapshot_id=$(aws ec2 create-snapshot --region $region --output=text --description $snapshot_description --volume-id $volume_id --query SnapshotId)
 		log "New snapshot is $snapshot_id"
@@ -114,8 +116,10 @@ cleanup_snapshots() {
 log_setup
 prerequisite_check
 
+for instance_id in $all_instanceid;
+do
 # Grab all volume IDs attached to this instance
 volume_list=$(aws ec2 describe-volumes --region $region --filters Name=attachment.instance-id,Values=$instance_id --query Volumes[].VolumeId --output text)
-
 snapshot_volumes
 cleanup_snapshots
+done
